@@ -64,6 +64,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if CommandLine.arguments.contains("--water-test") {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.pet.runWaterTest() }
         }
+        if CommandLine.arguments.contains("--update-test") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { self.updater.checkInBackground() }
+        }
         if CommandLine.arguments.contains("--stretch-test") {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.pet.stretchNow() }
         }

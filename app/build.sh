@@ -43,6 +43,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>SUFeedURL</key><string>https://github.com/Flitternie/zhuzhubao/releases/latest/download/appcast.xml</string>
   <key>SUPublicEDKey</key><string>LmeQZYmSC3rUeW13avdwmOt4ninZAsmqdy6P3GnJFRw=</string>
   <key>SUEnableAutomaticChecks</key><true/>
+  <key>SUAutomaticallyUpdate</key><true/>
   <key>SUScheduledCheckInterval</key><integer>86400</integer>
   <key>NSCalendarsUsageDescription</key><string>猪猪包会在日程开始前提醒你。</string>
   <key>NSCalendarsFullAccessUsageDescription</key><string>猪猪包会读取日历里的日程，在开始前提醒你。只在本机读取，不会上传。</string>

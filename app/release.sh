@@ -54,7 +54,7 @@ XML
 
 cd ..
 git add -A
-git commit -q -m "Release $NEW" || true
+git commit -q -m "Release $NEW"$'\n\n'"Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" || true
 git push -q origin HEAD
 gh release create "v$NEW" -R "$REPO" --target "$(git rev-parse HEAD)" --title "猪猪包 $NEW" \
   --notes "$NOTES_MD"$'\n'"第一次安装：下载 Zhuzhubao-$NEW.dmg，把猪猪包拖进 Applications。已经装了的会自动收到更新。" \
