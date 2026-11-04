@@ -1,0 +1,11 @@
+# Secrets
+*.key
+.env*
+
+# Local only, never published: real photos, generation experiments and drafts, build output
+photos/
+assets/
+app/build/
+app/tools/draw_perch_tail.py
+
+.DS_Store
