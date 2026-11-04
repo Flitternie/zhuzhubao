@@ -70,6 +70,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if CommandLine.arguments.contains("--update-test") {
             DispatchQueue.main.asyncAfter(deadline: .now() + 2) { self.updater.checkInBackground() }
         }
+        if CommandLine.arguments.contains("--affection-test") {      // pet three times, feed a shrimp: hearts + cuddles
+            for k in 0..<3 { DispatchQueue.main.asyncAfter(deadline: .now() + 1 + Double(k) * 6) { self.pet.runPetOnce() } }
+        }
         if CommandLine.arguments.contains("--demo") {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.pet.runDemo() }
         }
@@ -134,6 +137,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let cups = NSMenuItem(title: "今天喝了 \(pet.cupsToday) 杯水", action: nil, keyEquivalent: "")
         cups.isEnabled = false
         menu.addItem(cups)
+        let love = NSMenuItem(title: pet.affection.hearts, action: nil, keyEquivalent: "")
+        love.isEnabled = false
+        love.tag = 7001
+        menu.addItem(love)
         menu.addItem(.separator())
         let remindItem = NSMenuItem(title: "喝水提醒", action: nil, keyEquivalent: "")
         let remindMenu = NSMenu()
@@ -282,6 +289,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func menuWillOpen(_ menu: NSMenu) {
         // refresh the cup count; rebuild after the menu closes to avoid swapping it while open
         if let first = menu.items.first { first.title = "今天喝了 \(pet.cupsToday) 杯水" }
+        menu.item(withTag: 7001)?.title = pet.affection.hearts
     }
 }
 

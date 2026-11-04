@@ -235,6 +235,13 @@ final class PetController {
     }
 
     func start() {
+        let away = affection.checkIn()
+        if away >= 3 {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 4) { [weak self] in
+                self?.showBubble(["好想你啊～", "你终于来啦！好想你", "这几天去哪儿啦？想你了"].randomElement()!, seconds: 3)
+                self?.heartsUntil = Date().addingTimeInterval(1.6)
+            }
+        }
         let vf = currentScreen.visibleFrame
         catX = vf.midX - Self.canvas * scale / 2
         let savedBowl = UserDefaults.standard.double(forKey: "bowlX")
@@ -378,6 +385,8 @@ final class PetController {
                 face = .neutral
                 loafTailTick = nil; nextLoafTail = Date().addingTimeInterval(.random(in: 2...5))
                 lieClip = nil; curledSleep = false; nextLieClip = Date().addingTimeInterval(.random(in: 6...20))
+                if let p = pendingLieClip, sprites.lieClips[p] != nil { lieClip = (p, 0); loafTailTick = nil }
+                pendingLieClip = nil
                 nextIdleMove = Date().addingTimeInterval(3)
             }
         case .loafing(let until):
@@ -778,6 +787,7 @@ final class PetController {
         d.set(lastRefill, forKey: "lastRefill")
         d.set(cupsToday + 1, forKey: "cups")
         d.set(Self.today, forKey: "cupsDay")
+        gainAffection(.water, delay: 4.5)
         scheduleReminder()
         onChange?()
         let asked = waitingForWater
@@ -1125,6 +1135,10 @@ final class PetController {
     private var wasDrinking = false
     /// A lying clip (knead / liegroom / belly) playing over the lying pose, and when the next may start.
     private var lieClip: (name: String, tick: Int)?
+    /// A lying clip to play as soon as the cat has lain down (petting at high affection).
+    private var pendingLieClip: String?
+    /// Long-term affection: drinking, petting and shrimp (capped per day) make it a cuddlier cat.
+    let affection = Affection()
     private var nextLieClip = Date.distantFuture
     /// This sleep is curled up in a ball (`curl`) instead of stretched out (`doze`).
     private var curledSleep = false
@@ -1785,6 +1799,16 @@ extension PetController {
 
     // MARK: petting: stroke the cat with the cursor (no click needed)
 
+    /// Test: one petting spell as if stroked with the cursor (sitting cat), with the stroke kept going for a bit.
+    func runPetOnce() {
+        guard case .sitting = state else { return }
+        petMeter = 0
+        lastPetMove = Date()
+        for k in 1..<8 { DispatchQueue.main.asyncAfter(deadline: .now() + Double(k) * 0.5) { [weak self] in self?.lastPetMove = Date() } }
+        if petSessionStarted() { return }
+        reactToPetting()
+    }
+
     func updatePetting() {
         let p = mouse
         defer { lastPetPoint = cursorOverCat ? p : nil }
@@ -1805,12 +1829,34 @@ extension PetController {
             if petSessionStarted() { return }
             if case .loafing = state {
                 play([(.closed, 2.0)])
-                if lieClip == nil, sprites.lieClips["knead"] != nil { lieClip = ("knead", 0); loafTailTick = nil }   // kneads with pleasure
+                gainAffection(.pet, delay: 2.5)
+                // The more it likes you, the more often it kneads or rolls onto its back; otherwise it just purrs.
+                let r = Int.random(in: 0..<100)
+                let clip: String? = r < affection.bellyWhenLyingChance ? "belly"
+                                  : r < affection.bellyWhenLyingChance + affection.kneadWhenLyingChance ? "knead" : nil
+                if let clip, lieClip == nil, sprites.lieClips[clip] != nil { lieClip = (clip, 0); loafTailTick = nil }
             }
             sleepPetUntil = Date().addingTimeInterval(2.5)
             showBubble(Bool.random() ? "呼噜…" : "呼噜呼噜…", seconds: 2)
         default: break
         }
+    }
+
+    /// Adds affection; on a new step the cat says so with hearts. Returns false when today's cap was reached.
+    @discardableResult
+    func gainAffection(_ source: Affection.Source, delay: TimeInterval) -> Bool {
+        let g = affection.add(source)
+        if g.counted { onChange?() }
+        if let lv = g.levelUp {
+            let lines = [1: ["我们好像熟一点了～", "我开始喜欢你啦"], 2: ["我好像更喜欢你了！", "和你待着好舒服"],
+                         3: ["最想黏着你了～", "离不开你啦"], 4: ["最最喜欢你啦！", "你是我最喜欢的人！"]]
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                self?.showBubble(lines[lv]?.randomElement() ?? "喜欢你～", seconds: 3)
+                self?.heartsUntil = Date().addingTimeInterval(2.5)
+                self?.play([(.happy, 2.0)])
+            }
+        }
+        return g.counted
     }
 
     /// Counts a petting spell. The third one within a few minutes is too much: it gets a bit cross,
@@ -1819,7 +1865,7 @@ extension PetController {
         let now = Date()
         lastPetSession = now
         petSessions = petSessions.filter { now.timeIntervalSince($0) < 300 } + [now]
-        guard petSessions.count >= 3 else { return false }
+        guard petSessions.count >= affection.walkOffLimit else { return false }
         petSessions = []
         showBubble(["喵…别摸啦", "够了够了", "哼，换个地方睡"].randomElement()!, seconds: 2.2)
         switch state {
@@ -1850,6 +1896,15 @@ extension PetController {
     /// Being petted while awake: mostly purring, but sometimes it stretches, gives the spot a lick,
     /// or just squints happily and meows.
     private func reactToPetting() {
+        gainAffection(.pet, delay: 2.8)
+        // The more it likes you, the more often it flops down to knead or show its belly.
+        if Int.random(in: 0..<100) < affection.cuddleChance, perch == nil, !sprites.lieClips.isEmpty, !sprites.lie.isEmpty {
+            showBubble(["呼噜…最喜欢你了", "呼噜呼噜～"].randomElement()!, seconds: 2)
+            pendingLieClip = Bool.random() ? "belly" : "knead"
+            restOnly = true
+            lieDown()
+            return
+        }
         let r = Int.random(in: 0..<20)
         if r < 11 || sprites.rub.isEmpty && r < 14 {
             state = .petted(since: Date()); petFrameTick = 0; faceQueue = []
@@ -2129,9 +2184,11 @@ extension PetController {
         state = .sittingDown(0, sitFor: TimeInterval.random(in: 60...150))
         render()
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
-            self?.heartsUntil = Date().addingTimeInterval(1.6)
-            self?.showBubble("好吃！", seconds: 2)
-            self?.play([(.happy, 1.4), (.neutral, 0.4), (.lick, 0.16), (.neutral, 0.1), (.lick, 0.16)])
+            guard let self else { return }
+            self.heartsUntil = Date().addingTimeInterval(1.6)
+            let full = !self.gainAffection(.shrimp, delay: 2.4)
+            self.showBubble(full ? ["好吃！今天吃饱啦～", "好吃！明天再喂我吧"].randomElement()! : "好吃！", seconds: 2)
+            self.play([(.happy, 1.4), (.neutral, 0.4), (.lick, 0.16), (.neutral, 0.1), (.lick, 0.16)])
         }
     }
 }
