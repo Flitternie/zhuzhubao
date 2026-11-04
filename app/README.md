@@ -26,7 +26,7 @@ ZHUZHU_SIGN="Developer ID Application: 名字 (TEAMID)" ZHUZHU_NOTARY_PROFILE=�
 
 ### 发布新版本（自动更新）
 
-装好的猪猪包用 [Sparkle](https://sparkle-project.org)（`vendor/sparkle`，2.10.0）每天检查一次 GitHub 上最新 Release 里的 `appcast.xml`。发现新版本时猫会冒泡说「我学会新本领啦！」，点「更新」打开 Sparkle 窗口看更新说明并安装；菜单里也有「检查更新…」。
+装好的猪猪包用 [Sparkle](https://sparkle-project.org)（`vendor/sparkle`，2.10.0）每天检查一次 GitHub 上最新 Release 里的 `appcast.xml`。发现新版本后自动下载、校验签名，猫说「我去换身新毛毛，马上回来～」，3 秒后自动安装重启，回来后说「更新好啦！」。只有无法自动安装时（比如 app 所在文件夹没有写权限）才冒泡问「要更新吗？」。菜单里也有「检查更新…」。测试：`ZHUZHU_FEED=http://127.0.0.1:端口/appcast.xml` 指向本地 appcast，加 `--update-test` 立刻检查。
 
 ```sh
 ./release.sh 1.2 "伸懒腰更舒展了" "修好了晚上水碗变空的问题"
