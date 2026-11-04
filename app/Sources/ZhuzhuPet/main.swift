@@ -64,8 +64,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if CommandLine.arguments.contains("--water-test") {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.pet.runWaterTest() }
         }
+        if CommandLine.arguments.contains("--ask-update-test") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { self.updater.askForUpdates() }
+        }
         if CommandLine.arguments.contains("--update-test") {
             DispatchQueue.main.asyncAfter(deadline: .now() + 2) { self.updater.checkInBackground() }
+        }
+        if CommandLine.arguments.contains("--demo") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.pet.runDemo() }
+        }
+        if CommandLine.arguments.contains("--lieclip-test") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.pet.runLieClipTest() }
+        }
+        if CommandLine.arguments.contains("--curl-test") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.pet.runCurlTest(wakeAfter: 12) }
+        }
+        if CommandLine.arguments.contains("--zoom-test") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.pet.zoomies() }
+        }
+        if CommandLine.arguments.contains("--groom-test") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.pet.groomNow() }
         }
         if CommandLine.arguments.contains("--stretch-test") {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.pet.stretchNow() }
@@ -179,17 +197,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         placeItem.submenu = placeMenu
         menu.addItem(placeItem)
 
-        let eyeItem = NSMenuItem(title: "眼睛颜色", action: nil, keyEquivalent: "")
-        let eyeMenu = NSMenu()
-        for (name, value) in [("自动（白天蓝色，19 点后深色）", "auto"), ("始终蓝色", "day"), ("始终深色", "night")] {
-            let item = NSMenuItem(title: name, action: #selector(setEyes(_:)), keyEquivalent: "")
-            item.target = self
-            item.representedObject = value
-            item.state = pet.eyeMode.rawValue == value ? .on : .off
-            eyeMenu.addItem(item)
-        }
-        eyeItem.submenu = eyeMenu
-        menu.addItem(eyeItem)
 
         let sizeItem = NSMenuItem(title: "大小", action: nil, keyEquivalent: "")
         let sizeMenu = NSMenu()
@@ -202,17 +209,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         sizeItem.submenu = sizeMenu
         menu.addItem(sizeItem)
-        let bowlItem = NSMenuItem(title: "水碗", action: nil, keyEquivalent: "")
-        let bowlMenu = NSMenu()
-        for (name, value) in [("只在喝水时出现", false), ("一直显示", true)] {
-            let item = NSMenuItem(title: name, action: #selector(setBowlMode(_:)), keyEquivalent: "")
-            item.target = self
-            item.representedObject = value
-            item.state = pet.bowlAlwaysVisible == value ? .on : .off
-            bowlMenu.addItem(item)
-        }
-        bowlItem.submenu = bowlMenu
-        menu.addItem(bowlItem)
 
         menu.addItem(.separator())
         let login = NSMenuItem(title: "开机自动启动", action: #selector(toggleLogin), keyEquivalent: "")
@@ -220,11 +216,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         login.state = SMAppService.mainApp.status == .enabled ? .on : .off
         if SMAppService.mainApp.status == .requiresApproval { login.title = "开机自动启动（需在系统设置里允许）" }
         menu.addItem(login)
-        let update = NSMenuItem(title: "检查更新…", action: #selector(Updater.checkForUpdates), keyEquivalent: "")
+        let update = NSMenuItem(title: "检查更新", action: #selector(Updater.askForUpdates), keyEquivalent: "")
         update.target = updater
         menu.addItem(update)
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "?"
-        let about = NSMenuItem(title: "版本 \(version)", action: nil, keyEquivalent: "")
+        let about = NSMenuItem(title: "现在是 \(version) 版", action: nil, keyEquivalent: "")
         about.isEnabled = false
         menu.addItem(about)
         let quit = NSMenuItem(title: "退出猪猪包", action: #selector(quit), keyEquivalent: "q")
@@ -273,19 +269,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func openCalendarPrivacy() {
         if let u = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Calendars") { NSWorkspace.shared.open(u) }
     }
-    @objc private func setEyes(_ sender: NSMenuItem) {
-        guard let v = sender.representedObject as? String, let mode = PetController.EyeMode(rawValue: v) else { return }
-        pet.eyeMode = mode
-        rebuildMenu()
-    }
     @objc private func setStand(_ sender: NSMenuItem) {
         guard let minutes = sender.representedObject as? Double else { return }
         pet.standInterval = minutes * 60
-        rebuildMenu()
-    }
-    @objc private func setBowlMode(_ sender: NSMenuItem) {
-        guard let value = sender.representedObject as? Bool else { return }
-        pet.bowlAlwaysVisible = value
         rebuildMenu()
     }
     @objc private func setReminder(_ sender: NSMenuItem) {

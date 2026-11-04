@@ -156,6 +156,9 @@ final class SpriteSet {
     let wallUp: [Frame]         // 128 x 192 (feet at the bottom): rear up against a wall on the left, paws up, stretch
     let wallScratch: [Frame]    // same canvas: scratching the wall
     let perch: [Frame]          // lying on a window's top edge, tail hanging over (160 x 176, feet at the 128 line)
+    let run: [Frame]            // 160 wide, gallop loop facing left (extra width in front), for zoomies
+    let curl: [Frame]           // 160 wide: lying -> curled up in a ball, tail round the nose, asleep
+    let lieClips: [String: [Frame]] // 160 wide, start in the lying pose: knead, liegroom, belly
     let clips: [String: [Frame]]    // short idle clips that start and end in the sitting pose   // sitting, head turned: l1..l3, r1..r3 (sprite left/right), u1, u2   // sitting, pupils turned toward a direction: c, l, r, u, d, ul, ur, dl, dr
 
     init() {
@@ -194,6 +197,11 @@ final class SpriteSet {
         var lt: [Face: [Frame]] = [:]
         for face in [Face.neutral, .slit, .closed] { let f = SpriteSet.sequence("loaftail/tail-\(face.rawValue)"); if !f.isEmpty { lt[face] = f } }
         loafTail = lt
+        run = SpriteSet.sequence("run/run")
+        curl = SpriteSet.sequence("curl/curl")
+        var lc: [String: [Frame]] = [:]
+        for n in ["knead", "liegroom", "belly"] { let f = SpriteSet.sequence("\(n)/\(n)"); if !f.isEmpty { lc[n] = f } }
+        lieClips = lc
         wallUp = SpriteSet.sequence("wall/up")
         wallScratch = SpriteSet.sequence("wall/scratch")
         perch = SpriteSet.sequence("perch/perch")
@@ -207,7 +215,7 @@ final class SpriteSet {
         for n in ["scratch", "sneeze", "swat", "ear", "headshake"] { let f = SpriteSet.sequence("\(n)/\(n)"); if !f.isEmpty { cl[n] = f } }
         clips = cl
         var icons: [String: CGImage] = [:]
-        for n in ["shrimp", "toy", "water", "gear", "close"] { icons[n] = SpriteSet.tryLoad("ui/\(n)")?.image }
+        for n in ["shrimp", "toy", "water", "gear", "close", "pin", "pin-off"] { icons[n] = SpriteSet.tryLoad("ui/\(n)")?.image }
         ui = icons
     }
 

@@ -54,3 +54,24 @@
 **缺少：** 站着或走路的正侧面全身照。`walk-from-above.jpg` 是俯视角度，看不准腿长和身体高度，这两项目前要由 AI 推测。
 
 **走路姿态：** 走路时尾巴竖起，尾尖微微弯曲。
+
+## 生成新动作时的风格控制
+
+新动作用 PixelLab 生成（`/animate-pixminimax`，第一帧用已定稿的帧），**每次都把下面这段放进 `subject_description`**（上限 300 字符）。动作描述末尾再加一句 "Keep exactly the colours, face, eyes and proportions of the first frame."
+
+```
+fluffy cream-white cat, light warm grey shading, thin dark grey outline; big round deep-blue eyes with thick dark eyeliner; small pink nose; pink inner ears; dark grey-black paw pads, never pink; fluffy tail with white tip and grey-brown rings from base to middle
+```
+
+生成后对照原帧检查这几项，常见的偏差：
+
+| 项目 | 应该是 | 生成常出现的问题 |
+|---|---|---|
+| 肉垫 | 深灰近黑 | 画成粉色肉球 |
+| 眼睛 | 深蓝、粗深色眼线 | 偏亮偏青；张大眼露眼白显得受惊；凶眼 |
+| 毛色 | 奶白，阴影很浅、偏暖 | 整体偏灰、偏暗，或者偏冷的蓝灰 |
+| 尾巴 | 白尾尖，尾根到中段灰褐环纹 | 环纹变浅灰或消失 |
+| 嘴 | 张嘴时里面是深粉色 | 嘴里画成纯黑 |
+| 胡须 | 细浅灰线 | 侧脸时嘴边一团深灰 |
+
+脚本只改颜色、不改形状（`app/tools/style/`）：`mm_clean.py` 对齐地面、去杂点 → `degreen.py` → `stylefix.py`（毛色亮度和虹膜按分位数对齐参考帧；比参考偏冷的毛才换成参考的暖色；`--pads` 指定区域里的粉色改成深色肉垫）→ `facefix.py`（嘴里的黑块、胡须团）→ `softedge.py`。形状上的问题（脸画坏、凶眼、肉垫形状）只能重新生成。

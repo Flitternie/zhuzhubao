@@ -54,8 +54,10 @@ final class PetController {
     static let drinkApproachShift: CGFloat = -11   // the cat steps toward the bowl inside the clip
     // Frame orders (each index is one tick). Lapping uses only the two steadiest frames, held two ticks each.
     static let drinkSequence: [Int] = [0, 1, 2, 3, 3] + Array(repeating: [3, 3, 4, 4], count: 8).flatMap { $0 } + [3, 3, 2, 2]
-    // Paw up to the chin, small licking motions between the two top frames, paw down.
-    static let groomSequence: [Int] = [0, 0, 1, 1, 2, 2, 2, 1, 1, 2, 2, 2, 1, 1, 2, 2, 2, 1, 1, 0, 0]
+    /// Builds a frame order from segments: each frame index held `hold` ticks, segments repeated.
+    static func seq(_ parts: [([Int], Int, Int)]) -> [Int] {
+        parts.flatMap { frames, hold, times in Array(repeating: frames.flatMap { Array(repeating: $0, count: hold) }, count: times).flatMap { $0 } }
+    }
     static func slow(_ n: Int, _ hold: Int) -> [Int] { (0..<n).flatMap { Array(repeating: $0, count: hold) } }
     // Picked up by the scruff: frames of `lift` and the scruff point (sprite pixels, top-left origin).
     static let liftSurprised = 4, liftRelaxed = 5, liftWiggle = [3, 4, 5, 4]
@@ -85,7 +87,8 @@ final class PetController {
     private(set) var lastRefill: Date
     private var reminded = 0               // reminders shown in the current cycle
     /// false: the bowl only shows up when it is time to drink and leaves once you have drunk.
-    var bowlAlwaysVisible: Bool { didSet { UserDefaults.standard.set(bowlAlwaysVisible, forKey: "bowlAlwaysVisible"); render() } }
+    /// The bowl only shows while the cat is thirsty or drinking (there used to be an "always" option).
+    let bowlAlwaysVisible = false
     private var bowlNeeded = false         // a drink is pending: keep the bowl out
     /// Drinking is a little two-way deal: when its bowl is empty the cat asks you to drink a glass first;
     /// only then do you get to fill its bowl, and it drinks with you.
@@ -211,7 +214,6 @@ final class PetController {
         drinkInterval = d.object(forKey: "drinkInterval") as? TimeInterval ?? 45 * 60
         standInterval = d.object(forKey: "standInterval") as? TimeInterval ?? 50 * 60
         lastRefill = (d.object(forKey: "lastRefill") as? Date) ?? Date()
-        bowlAlwaysVisible = d.object(forKey: "bowlAlwaysVisible") as? Bool ?? false
         window = PetWindow(size: CGSize(width: 128, height: 128))
         view = PetView(frame: CGRect(x: 0, y: 0, width: 128, height: 128))
         window.contentView = view
@@ -260,8 +262,9 @@ final class PetController {
     private var hour: Int { Calendar.current.component(.hour, from: Date()) }
     /// Dark, dilated eyes in the evening and at night.
     enum EyeMode: String { case auto, day, night }
-    var eyeMode: EyeMode = EyeMode(rawValue: UserDefaults.standard.string(forKey: "eyeMode") ?? "") ?? .auto {
-        didSet { UserDefaults.standard.set(eyeMode.rawValue, forKey: "eyeMode"); render() }
+    /// Always automatic now (blue by day, dark from 19:00); the menu option was removed.
+    var eyeMode: EyeMode = .auto {
+        didSet { render() }
     }
     private var isNight: Bool {
         switch eyeMode { case .day: return false; case .night: return true; case .auto: return hour >= 19 || hour < 7 }
@@ -280,6 +283,9 @@ final class PetController {
         window.orderFrontRegardless()
     }
 
+    private var isRunning: Bool {
+        if case .walking(_, let then) = state, then == .zoom, !sprites.run.isEmpty { return true } else { return false }
+    }
     private var isDrinking: Bool { if case .drinking = state { return true } else { return false } }
     private var isEating: Bool { if case .eating = state { return true } else { return false } }
     private var isAirborne: Bool {
@@ -334,6 +340,7 @@ final class PetController {
             } else {
                 facingRight = dx > 0
                 walkIndex = (walkIndex + 1) % sprites.walk.count
+                runIndex += 1
                 // Chasing the toy or going for a shrimp: hurry.
                 let fast: CGFloat = then == .zoom ? 2.8 : ((then == .play || then == .eat) ? 1.8 : 1)
                 let stepLen = min(abs(dx), Self.stepPixels * scale * fast)
@@ -350,7 +357,7 @@ final class PetController {
         case .sittingDown(let i, let sitFor):
             if i + 1 < sprites.sitDown.count { state = .sittingDown(i + 1, sitFor: sitFor) } else { sit(for: sitFor) }
         case .grooming(let i):
-            if i + 1 < Self.groomSequence.count { state = .grooming(i + 1) } else { sit(for: TimeInterval.random(in: 60...180)) }
+            if i + 1 < groomSequence.count { state = .grooming(i + 1) } else { sit(for: TimeInterval.random(in: 60...180)) }
         case .yawning(let i, let thenSleep):
             if i + 1 < yawnSequence.count { state = .yawning(i + 1, thenSleep: thenSleep) }
             else if thenSleep { lieDown() } else { sit(for: TimeInterval.random(in: 30...120)) }
@@ -365,21 +372,27 @@ final class PetController {
                 face = .neutral; perchTick = 0
                 perchTailDown = sprites.loafTail.isEmpty || Bool.random()
                 loafTailTick = nil; nextLoafTail = Date().addingTimeInterval(.random(in: 2...5))
+                lieClip = nil; curledSleep = false; nextLieClip = Date().addingTimeInterval(.random(in: 8...25))
             } else {
                 state = .loafing(until: Date().addingTimeInterval(isBedtime ? .random(in: 20...40) : .random(in: 40...100)))
                 face = .neutral
                 loafTailTick = nil; nextLoafTail = Date().addingTimeInterval(.random(in: 2...5))
+                lieClip = nil; curledSleep = false; nextLieClip = Date().addingTimeInterval(.random(in: 6...20))
                 nextIdleMove = Date().addingTimeInterval(3)
             }
         case .loafing(let until):
             updateLoafFace(now)
-            stepLoafTail(now)
-            if now >= until {
+            if !stepLieClip(now, allowBelly: true) { stepLoafTail(now) }
+            if now >= until, lieClip == nil {
                 if restOnly { restOnly = false; state = .wakingUp(wakeFromLoafStart) }      // just a rest: sit back up
-                else { state = sprites.doze.isEmpty ? .sleeping : .dozing(0) }
+                else {
+                    // Either stretched out (doze) or curled up in a ball with the tail round the nose.
+                    curledSleep = !sprites.curl.isEmpty && (sprites.doze.isEmpty || Bool.random())
+                    state = (sprites.doze.isEmpty && !curledSleep) ? .sleeping : .dozing(0)
+                }
             }
         case .dozing(let i):
-            if i + 1 < dozeSequence.count { state = .dozing(i + 1) } else { state = .sleeping }
+            if i + 1 < currentDozeSequence.count { state = .dozing(i + 1) } else { state = .sleeping }
         case .sleeping:
             if shouldWake() { wake() }
         case .wakingUp(let i):
@@ -435,8 +448,8 @@ final class PetController {
         case .perchLying(let until):
             perchTick += 1
             updateLoafFace(now)
-            if !perchTailDown { stepLoafTail(now) }
-            if now >= until { state = .wakingUp(wakeFromLoafStart) }
+            if !perchTailDown, !stepLieClip(now, allowBelly: false) { stepLoafTail(now) }
+            if now >= until, lieClip == nil { state = .wakingUp(wakeFromLoafStart) }
         case .dizzy(let until):
             updateFace(now)
             if now >= until {
@@ -480,6 +493,36 @@ final class PetController {
     }
 
     private var yawnSequence: [Int] { Self.slow(sprites.yawn.count, 2) }
+    /// Sitting wash (13 frames): paw up, lick the paw, wipe the face and behind the ear, paw down.
+    /// Frame 13 is never held (its eye looks cross).
+    private var groomSequence: [Int] {
+        let n = sprites.groom.count
+        guard n >= 12 else { return Self.slow(n, 4) }
+        return Self.seq([([0, 1, 2, 3], 2, 1), ([4, 5, 6, 7, 6, 5], 2, 2), ([7, 8, 9], 2, 1),
+                         ([10, 11, 10, 11], 2, 2), ([9, 8, 3, 2, 1, 0], 2, 1)])
+    }
+    /// Lying clips, all starting and ending in the lying pose.
+    private func lieClipSequence(_ name: String) -> [Int] {
+        let n = sprites.lieClips[name]?.count ?? 0
+        guard n >= 9 else { return Self.slow(n, 2) }
+        switch name {
+        case "knead":     // paws press in turn, eyes half shut
+            // 17 frames: 2...11 is one left-right cycle ending back at the lying pose (11 ~ 1);
+            // 12...17 + 8...11 is a slightly different one. Alternate them so it doesn't look looped.
+            guard n >= 17 else { return Self.seq([([0, 1, 2, 3], 2, 1), ([3, 4, 5, 6, 7, 8, 7, 6, 5, 4], 2, 3), ([3, 2, 1, 0], 2, 1)]) }
+            let a = Array(1...10), b = Array(11...16) + Array(7...10)
+            return Self.seq([([0], 2, 1), (a, 1, 1), (b, 1, 1), (a, 1, 1), (b, 1, 1), (a, 1, 1), ([0], 2, 1)])
+        case "liegroom":  // lick a front paw, wipe the face
+            guard n >= 13 else { return Self.slow(n, 2) }
+            return Self.seq([([0, 1, 2, 3], 2, 1), ([4, 5, 6, 7, 6, 5], 2, 2), ([8, 9], 2, 1),
+                             ([10, 11, 12, 11], 2, 2), ([9, 8, 3, 2, 1, 0], 2, 1)])
+        case "belly":     // roll onto the back, wiggle, roll back
+            guard n >= 13 else { return Self.slow(n, 2) }
+            return Self.seq([([0, 1, 2, 3], 2, 1), (Array(4..<n) + Array((5..<(n - 1)).reversed()), 2, 2), ([3, 2, 1, 0], 2, 1)])
+        default: return Self.slow(n, 2)
+        }
+    }
+    private var curlSequence: [Int] { Self.slow(sprites.curl.count, 4) }
     private var stretchSequence: [Int] {
         let n = sprites.stretch.count
         guard n > 0 else { return [] }
@@ -493,15 +536,19 @@ final class PetController {
     private var lieSequence: [Int] { Self.slow(sprites.lie.count, 3) }
     private var dozeSequence: [Int] { Self.slow(sprites.doze.count, 5) }
     /// Waking up plays the whole lie-down backwards: chin up, a moment lying, then sit up.
+    /// Lying down to asleep: stretched out (doze) or curled up (curl).
+    private var currentDozeSequence: [Int] { curledSleep ? curlSequence : dozeSequence }
+    private func dozeFrame(_ k: Int) -> Frame { curledSleep ? sprites.curl[k] : sprites.doze[k] }
     private var wakeFrames: [Frame] {
-        let doze = dozeSequence.reversed().map { sprites.doze[$0] }
+        let doze = currentDozeSequence.reversed().map { dozeFrame($0) }
         let hold = Array(repeating: sprites.loaf[.neutral] ?? sprites.lie.last!, count: 8)
         let lie = lieSequence.reversed().map { sprites.lie[$0] }
         return doze + hold + lie
     }
-    private var wakeFromLoafStart: Int { dozeSequence.count + 6 }
+    private var wakeFromLoafStart: Int { currentDozeSequence.count + 6 }
 
     private func wake() {
+        lieClip = nil
         switch state {
         case .sleeping, .dozing: state = .wakingUp(0)
         case .lyingDown, .loafing: state = .wakingUp(wakeFromLoafStart)
@@ -526,7 +573,29 @@ final class PetController {
         }
     }
 
+    /// Lying: now and then knead, lick a paw, or (on the floor) roll onto the back.
+    /// Returns true while a clip is playing (the tail swish waits).
+    @discardableResult
+    private func stepLieClip(_ now: Date, allowBelly: Bool) -> Bool {
+        if let c = lieClip {
+            if c.tick + 1 < lieClipSequence(c.name).count { lieClip = (c.name, c.tick + 1); return true }
+            lieClip = nil
+            nextLieClip = now.addingTimeInterval(.random(in: 20...45))
+            return false
+        }
+        guard now >= nextLieClip, loafTailTick == nil else { return false }
+        var names = ["knead", "liegroom", "liegroom"]
+        if allowBelly { names += ["belly"] }
+        guard let name = names.filter({ sprites.lieClips[$0] != nil }).randomElement() else { nextLieClip = .distantFuture; return false }
+        lieClip = (name, 0)
+        return true
+    }
+
     private func loafFrame(_ face: Face) -> Frame? {
+        if let c = lieClip, let frames = sprites.lieClips[c.name] {
+            let q = lieClipSequence(c.name)
+            if c.tick < q.count { return frames[q[c.tick]] }
+        }
         guard let t = loafTailTick, let frames = sprites.loafTail[face] ?? sprites.loafTail[.neutral],
               t < loafTailSequence.count else { return nil }
         return frames[loafTailSequence[t]]
@@ -944,18 +1013,19 @@ final class PetController {
 
     private func currentFrame() -> Frame {
         switch state {
+        case .walking(_, let then) where then == .zoom && !sprites.run.isEmpty: return sprites.run[runIndex % sprites.run.count]
         case .walking: return sprites.walk[walkIndex]
         case .standingUp(let i, _, _): return sprites.standUp[i]
         case .sittingDown(let i, _): return sprites.sitDown[i]
-        case .grooming(let i): return sprites.groom[Self.groomSequence[i]]
+        case .grooming(let i): return sprites.groom[groomSequence[i]]
         case .yawning(let i, _): return sprites.yawn[yawnSequence[i]]
         case .drinking(let i): return sprites.drink[Self.drinkSequence[i]]
         case .stretching(let i): return sprites.stretch[stretchSequence[i]]
         case .lyingDown(let i): return sprites.lie[lieSequence[i]]
         case .loafing: return loafFrame(face) ?? sprites.loaf[face] ?? sprites.loaf[.neutral] ?? sprites.lie.last!
-        case .dozing(let i): return sprites.doze[dozeSequence[i]]
+        case .dozing(let i): return dozeFrame(currentDozeSequence[i])
         case .wakingUp(let i): return wakeFrames[i]
-        case .sleeping: return sprites.doze.last ?? sprites.lie.last!
+        case .sleeping: return (curledSleep ? sprites.curl.last : sprites.doze.last) ?? sprites.lie.last!
         case .held(let since): return sprites.lift[heldFrameIndex(since)]
         case .flying: return sprites.lift[Self.liftSurprised]
         case .landing: return sprites.sit[.closed]!
@@ -1011,7 +1081,7 @@ final class PetController {
         else if case .wallScratch = state { origin.x += (facingRight ? 2 : -2) * scale }   // 128 x 192, feet at the bottom like the 128 canvas
         else if CGFloat(frame.height) > Self.canvas { origin.y -= (CGFloat(frame.height) - Self.canvas) * scale }   // tail hangs below the ledge
         // Wider canvases (lying down) keep the cat's sitting spot on the left; mirrored, it is on the right.
-        if case .stretching = state {
+        if isRunning || { if case .stretching = state { return true } else { return false } }() {
             // The stretch canvas is wider in front of the cat (front paws reach forward), body at the usual spot.
             if !facingRight { origin.x -= (CGFloat(frame.width) - Self.canvas) * scale }
         } else if !isDrinking && !isEating && facingRight && CGFloat(frame.width) > Self.canvas { origin.x -= (CGFloat(frame.width) - Self.canvas) * scale }
@@ -1053,6 +1123,12 @@ final class PetController {
 
     private var bowlVisible = false
     private var wasDrinking = false
+    /// A lying clip (knead / liegroom / belly) playing over the lying pose, and when the next may start.
+    private var lieClip: (name: String, tick: Int)?
+    private var nextLieClip = Date.distantFuture
+    /// This sleep is curled up in a ball (`curl`) instead of stretched out (`doze`).
+    private var curledSleep = false
+    private var runIndex = 0
     private func setBowlVisible(_ visible: Bool, animated: Bool) {
         guard visible != bowlVisible else { return }
         bowlVisible = visible
@@ -1499,6 +1575,60 @@ extension PetController {
         }
     }
 
+    /// Demo: every new move in a row, each announced in a bubble first.
+    func runDemo() {
+        var t: TimeInterval = 0
+        func at(_ d: TimeInterval, _ label: String, _ run: @escaping () -> Void) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + d) { [weak self] in self?.showBubble(label, seconds: 2) }
+            DispatchQueue.main.asyncAfter(deadline: .now() + d + 2.2) { run() }
+        }
+        at(t, "① 舔爪洗脸，然后蹭蹭你的手") { [weak self] in self?.groomNow() }
+        t += 2.2 + Double(groomSequence.count) * Self.tick + 1 + 6.5
+        let lieT = 3.5 + ["knead", "liegroom", "belly"].reduce(0.0) { $0 + Double(lieClipSequence($1).count) * Self.tick + 1.5 }
+        at(t, "② 趴下：踩奶 → 舔爪 → 翻肚皮") { [weak self] in self?.runLieClipTest() }
+        t += 2.2 + lieT + 4
+        at(t, "③ 团成一团睡，一会儿醒来") { [weak self] in self?.runCurlTest(wakeAfter: 11) }
+        t += 2.2 + 11 + 5
+        at(t, "④ 跑酷！") { [weak self] in self?.zoomies() }
+        t += 2.2 + 7
+        DispatchQueue.main.asyncAfter(deadline: .now() + t) { [weak self] in self?.showBubble("演示完啦～", seconds: 2.5) }
+    }
+
+    /// Test: a full wash, then being stroked (rubbing against the hand) for a few seconds.
+    func groomNow() {
+        state = .grooming(0)
+        let after = Double(groomSequence.count) * Self.tick + 1
+        DispatchQueue.main.asyncAfter(deadline: .now() + after) { [weak self] in
+            guard let self else { return }
+            self.state = .petted(since: Date()); self.petFrameTick = 0
+            for k in 0..<12 { DispatchQueue.main.asyncAfter(deadline: .now() + Double(k) * 0.5) { [weak self] in self?.lastPetMove = Date() } }
+        }
+    }
+
+    /// Test: lie down, then knead, lick a paw and roll onto the back in turn; then sit up.
+    func runLieClipTest() {
+        lieDown()
+        var t: TimeInterval = 3.5
+        for name in ["knead", "liegroom", "belly"] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + t) { [weak self] in
+                guard let self, case .loafing = self.state else { return }
+                self.loafTailTick = nil; self.lieClip = (name, 0)
+            }
+            t += Double(lieClipSequence(name).count) * Self.tick + 1.5
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + t) { [weak self] in self?.wake() }
+    }
+
+    /// Test: lie down and fall asleep curled up; wake after `wakeAfter` seconds.
+    func runCurlTest(wakeAfter: TimeInterval) {
+        lieDown()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3.5) { [weak self] in
+            guard let self, case .loafing = self.state else { return }
+            self.curledSleep = true; self.state = .dozing(0)
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + wakeAfter) { [weak self] in self?.wake() }
+    }
+
     /// Scripted pick-up, swing and throw, for checking the physics without a real mouse.
     /// Scripted red-dot play: the dot sweeps along the floor near the cat for a while.
     func runPlayTest() {
@@ -1631,7 +1761,13 @@ extension PetController {
 extension PetController {
     var tailSequence: [Int] { let n = sprites.tail.count; return n == 0 ? [] : Self.slow(n, 2) + Self.slow(n, 2).reversed() }
     // Eyes shut, chin slowly up, hold, slowly down.
-    var rubSequence: [Int] { sprites.rub.count < 2 ? [0] : [0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0] }
+    /// Petted: rubs the head against the hand, side to side (ping-pong through the frames).
+    var rubSequence: [Int] {
+        let n = sprites.rub.count
+        if n < 2 { return [0] }
+        if n < 4 { return [0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0] }
+        return Self.slow(n, 2) + Array((1..<(n - 1)).reversed()).flatMap { [$0, $0] }
+    }
     var crouchSequence: [Int] {
         let n = sprites.crouch.count
         guard n > 0 else { return [] }
@@ -1667,7 +1803,10 @@ extension PetController {
             // One spell per few seconds of stroking, however long the stroke goes on.
             guard Date().timeIntervalSince(lastPetSession) > 4 else { lastPetSession = Date(); return }
             if petSessionStarted() { return }
-            if case .loafing = state { play([(.closed, 2.0)]) }
+            if case .loafing = state {
+                play([(.closed, 2.0)])
+                if lieClip == nil, sprites.lieClips["knead"] != nil { lieClip = ("knead", 0); loafTailTick = nil }   // kneads with pleasure
+            }
             sleepPetUntil = Date().addingTimeInterval(2.5)
             showBubble(Bool.random() ? "呼噜…" : "呼噜呼噜…", seconds: 2)
         default: break
@@ -1999,6 +2138,15 @@ extension PetController {
 
 extension PetController {
     /// Right-click on the cat: quick actions right where the cat is.
+    /// The pin button: keep on top of all windows, or stay down on the desktop behind them.
+    func togglePin() {
+        onTop.toggle()
+        UserDefaults.standard.set(onTop, forKey: "onTop")
+        onChange?()
+        showBubble(onTop ? ["钉好啦，我就待在最前面～", "好，我在最前面陪你"].randomElement()!
+                         : ["那我躲到窗口后面去咯", "我去桌面上待着～"].randomElement()!, seconds: 2.2)
+    }
+
     func showActionBar() {
         if actionBar.isVisible { actionBar.dismiss(); return }      // right-click again to close
         bubble.orderOut(nil)
@@ -2007,7 +2155,8 @@ extension PetController {
             .init(icon: ui["shrimp"]!, tip: "喂一只虾（点一下放下）") { [weak self] in self?.feedShrimp() },
             .init(icon: ui["toy"]!, tip: playMode ? "收起逗猫红点" : "逗猫：红点跟着鼠标") { [weak self] in self?.playMode.toggle() },
             .init(icon: ui["water"]!, tip: "我喝水了") { [weak self] in self?.refill() },
-            .init(icon: ui["gear"]!, tip: "设置") { [weak self] in self?.openSettings?() },
+            .init(icon: (onTop ? ui["pin"] : ui["pin-off"]) ?? ui["gear"]!,
+                  tip: onTop ? "钉在最前面啦（点一下躲到窗口后面）" : "把我钉到最前面") { [weak self] in self?.togglePin() },
         ]
         let f = window.frame
         // Just above the cat's head, never over it.
