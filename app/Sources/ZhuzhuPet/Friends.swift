@@ -1,4 +1,4 @@
-import Foundation
+import AppKit
 
 /// Paired friends, through the small relay at zhuzhubao.lynie.cc (server/ in the repo).
 /// Each install has a random id and key (made on first use, kept in the app's defaults); nothing is
@@ -49,6 +49,8 @@ final class Friends: NSObject, URLSessionWebSocketDelegate {
     private let profile = ProcessInfo.processInfo.environment["ZHUZHU_NET_PROFILE"].map { "-" + $0 } ?? ""
     private let relay = URL(string: ProcessInfo.processInfo.environment["ZHUZHU_RELAY"] ?? "wss://zhuzhubao.lynie.cc/ws")!
     private func k(_ s: String) -> String { "net.\(s)\(profile)" }
+    private let netLog = ProcessInfo.processInfo.environment["ZHUZHU_NETLOG"] != nil
+    private func log(_ s: @autoclosure () -> String) { if netLog { print("[net]", s()); fflush(stdout) } }
 
     private var session: URLSession!
     private var task: URLSessionWebSocketTask?
@@ -59,10 +61,22 @@ final class Friends: NSObject, URLSessionWebSocketDelegate {
     private var sentStatus: String?
     private var timers: [Timer] = []
     private var requestTimer: Timer?
+    private var connectingSince = Date()
+    private var retryAt = Date.distantPast
 
     override init() {
         super.init()
         session = URLSession(configuration: .default, delegate: self, delegateQueue: .main)
+        // Back from sleep the old socket is usually dead without saying so: start a fresh one.
+        NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
+            guard let self, self.wanted || !self.friends.isEmpty else { return }
+            self.log("woke up: reconnect")
+            self.backoff = 2
+            self.task?.cancel()
+            self.task = nil
+            self.setConnected(false)
+            self.connect()
+        }
         // Friends known from last time, so the menu can show them before the connection is up.
         if let saved = d.array(forKey: k("friends")) as? [[String: String]] {
             friends = saved.compactMap { f in f["id"].map { Friend(id: $0, name: f["name"] ?? "", online: false, status: nil) } }
@@ -80,6 +94,7 @@ final class Friends: NSObject, URLSessionWebSocketDelegate {
     }
 
     func start() {
+        log("start, friends \(friends.count)")
         if !friends.isEmpty { connect() }
         timers.append(Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in self?.tick() })
     }
@@ -125,8 +140,10 @@ final class Friends: NSObject, URLSessionWebSocketDelegate {
         req.setValue(me.key, forHTTPHeaderField: "X-Pet-Key")
         req.timeoutInterval = 15
         let t = session.webSocketTask(with: req)
+        log("connect \(relay)")
         task = t
         lastHeard = Date()
+        connectingSince = Date()
         t.resume()
         receive(t)
     }
@@ -146,20 +163,18 @@ final class Friends: NSObject, URLSessionWebSocketDelegate {
     }
 
     private func dropped() {
+        log("dropped, retry in \(backoff)s, wanted \(wanted)")
         task = nil
         sentStatus = nil
         setConnected(false)
         guard wanted else { return }
-        let wait = backoff
+        retryAt = Date().addingTimeInterval(backoff)      // tick() reconnects then
         backoff = min(backoff * 2, 60)
-        DispatchQueue.main.asyncAfter(deadline: .now() + wait) { [weak self] in
-            guard let self, self.wanted, self.task == nil else { return }
-            self.connect()
-        }
     }
 
     func urlSession(_ session: URLSession, webSocketTask: URLSessionWebSocketTask, didOpenWithProtocol protocol: String?) {
         guard webSocketTask === task else { return }
+        log("open")
         backoff = 2
         lastHeard = Date()
         setConnected(true)
@@ -175,6 +190,7 @@ final class Friends: NSObject, URLSessionWebSocketDelegate {
     }
 
     func urlSession(_ session: URLSession, task t: URLSessionTask, didCompleteWithError error: Error?) {
+        log("complete \(String(describing: error)) \((t.response as? HTTPURLResponse)?.statusCode ?? 0)")
         if t === task { dropped() }
     }
 
@@ -194,8 +210,17 @@ final class Friends: NSObject, URLSessionWebSocketDelegate {
         }
     }
 
+    /// Every 3 s: keep the connection alive, and notice when it is gone or stuck.
     private func tick() {
-        guard let t = task else { return }
+        if !friends.isEmpty { wanted = true }
+        guard let t = task else {
+            if wanted && Date() >= retryAt { connect() }
+            return
+        }
+        if !connected && Date().timeIntervalSince(connectingSince) > 20 {     // a handshake that never finished
+            log("connect stuck: retry")
+            t.cancel(); dropped(); return
+        }
         if connected {
             if Date().timeIntervalSince(lastHeard) > 75 { t.cancel(); dropped(); return }   // gone quiet: reconnect
             t.send(.string("ping")) { _ in }
@@ -226,6 +251,7 @@ final class Friends: NSObject, URLSessionWebSocketDelegate {
     }
 
     private func handle(_ m: [String: Any]) {
+        log("<- \(m["t"] ?? "?")")
         switch m["t"] as? String {
         case "hello":
             friends = (m["friends"] as? [Any] ?? []).compactMap(parse)

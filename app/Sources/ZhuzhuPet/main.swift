@@ -338,6 +338,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 print("my name:", self.friends.myName, "friends:", self.friends.friends.map(\.display)); fflush(stdout)
             }
         }
+        if let at = env["ZHUZHU_PRESS_AT"].flatMap(Double.init) {   // testing: click the bubble's first button then
+            DispatchQueue.main.asyncAfter(deadline: .now() + at) { self.pet.bubble.pressButton(0) }
+        }
         if args.contains("--ask-test") { DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { self.social.rename() } }
         if args.contains("--net-invite"), let file = env["ZHUZHU_CODE_FILE"] {
             let old = friends.onEvent

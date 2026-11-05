@@ -279,15 +279,16 @@ final class Social {
             if fresh { hand.enter() }
             hand.wave()
             let said = (text?.isEmpty == false ? text! : "嗨～")
-            pet.friendSaidHi("\(f.display)：\(said)", buttons: [
-                .init(title: "回个招呼") { [weak self] in
-                    self?.pickGreeting("回\(f.display)什么？") { reply in
-                        self?.friends.reply(f.id, text: reply)
-                        self?.say("帮你说啦～", 1.6)
-                    }
-                },
-                .init(title: "好呀") {},
-            ])
+            // Answering (unlike greeting someone yourself): just 好呀, or write your own.
+            let send: (String) -> Void = { [weak self] reply in
+                self?.friends.reply(f.id, text: reply)
+                self?.say("帮你说「\(reply)」啦～", 1.8)
+            }
+            var buttons: [BubbleWindow.Button] = ["好呀～"].map { r in .init(title: r) { send(r) } }
+            buttons.append(.init(title: "自己写…") { [weak self] in
+                self?.pet.ask("回\(f.display)什么？", maxLength: 30) { text in if let text { send(text) } }
+            })
+            pet.friendSaidHi("\(f.display)：\(said)", buttons: buttons)
         default: break
         }
     }

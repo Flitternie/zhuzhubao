@@ -79,9 +79,10 @@ export class Hub extends DurableObject {
     this.sql.exec("UPDATE users SET seen = ? WHERE id = ?", now, id);
 
     const wasOnline = this.online(id);
+    if ((await this.ctx.storage.getAlarm()) == null) await this.ctx.storage.setAlarm(now + 60000);
     const [client, server] = Object.values(new WebSocketPair());
     this.ctx.acceptWebSocket(server, [id]);
-    server.serializeAttachment({ id, status: "awake" });
+    server.serializeAttachment({ id, status: "awake", at: now });
     this.send(server, { t: "hello", you: id, name: this.nameOf(id), friends: this.friendList(id) });
     if (!wasOnline) this.tellFriends(id, { t: "presence", id, online: true, status: "awake" });
     return new Response(null, { status: 101, webSocket: client });
@@ -185,7 +186,7 @@ export class Hub extends DurableObject {
   left(ws) {
     const me = ws.deserializeAttachment()?.id;
     if (!me) return;
-    const still = this.ctx.getWebSockets(me).some((s) => s !== ws && s.readyState === WebSocket.OPEN);
+    const still = this.sockets(me).some((s) => s !== ws);
     if (!still) {
       this.sql.exec("UPDATE users SET seen = ? WHERE id = ?", Date.now(), me);
       this.tellFriends(me, { t: "presence", id: me, online: false });
@@ -206,7 +207,30 @@ export class Hub extends DurableObject {
   all(q, ...a) { return this.sql.exec(q, ...a).toArray(); }
   nameOf(id) { return this.one("SELECT name FROM users WHERE id = ?", id)?.name ?? ""; }
   isPaired(a, b) { return !!this.one("SELECT 1 AS x FROM pairs WHERE a = ? AND b = ?", a, b); }
-  sockets(id) { return this.ctx.getWebSockets(id).filter((s) => s.readyState === WebSocket.OPEN); }
+  /** Open sockets that are still alive: the app pings every few seconds, so one that has been quiet
+   *  for 90 s belongs to a Mac that went to sleep or lost its network without closing. */
+  sockets(id) {
+    const now = Date.now();
+    return this.ctx.getWebSockets(id).filter((s) => {
+      if (s.readyState !== WebSocket.OPEN) return false;
+      const last = Math.max(this.ctx.getWebSocketAutoResponseTimestamp(s)?.getTime() ?? 0, s.deserializeAttachment()?.at ?? 0);
+      return now - last < 90000;
+    });
+  }
+
+  /** Once a minute while anyone is connected: close sockets that went quiet and tell friends. */
+  async alarm() {
+    const now = Date.now();
+    const all = this.ctx.getWebSockets();
+    for (const s of all) {
+      const last = Math.max(this.ctx.getWebSocketAutoResponseTimestamp(s)?.getTime() ?? 0, s.deserializeAttachment()?.at ?? 0);
+      if (s.readyState === WebSocket.OPEN && now - last >= 90000) {
+        try { s.close(1001, "stale"); } catch {}
+        this.left(s);
+      }
+    }
+    if (this.ctx.getWebSockets().some((s) => s.readyState === WebSocket.OPEN)) await this.ctx.storage.setAlarm(now + 60000);
+  }
   online(id) { return this.sockets(id).length > 0; }
   statusOf(id) { return this.sockets(id)[0]?.deserializeAttachment()?.status ?? "awake"; }
   friendInfo(id) { const on = this.online(id); return { id, name: this.nameOf(id), online: on, status: on ? this.statusOf(id) : null }; }
