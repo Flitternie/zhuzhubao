@@ -32,17 +32,72 @@ final class BubbleWindow: NSPanel {
         }
     }
 
-    override var canBecomeKey: Bool { false }
+    override var canBecomeKey: Bool { field != nil }
     private var buttons: [Button] = []
+    private var field: NSTextField?
+    private var fieldDelegate: FieldDelegate?
     /// What the bubble currently says, for callers that only want to close their own bubble.
     private(set) var text = ""
 
     /// `pixel` is the size of one art pixel in points (the cat's scale). `tipX` is where the tail points, in screen x.
     func show(_ text: String, buttons: [Button] = [], tipX: CGFloat, baseY: CGFloat, pixel: CGFloat,
               level: NSWindow.Level, seconds: TimeInterval) {
+        show(text, buttons: buttons, input: nil, tipX: tipX, baseY: baseY, pixel: pixel, level: level, seconds: seconds)
+    }
+
+    /// A bubble with a pixel text box under the text: "好" (or Return) passes what was typed, "算了" (or Esc) nil.
+    func ask(_ text: String, initial: String, maxLength: Int, tipX: CGFloat, baseY: CGFloat, pixel: CGFloat,
+             level: NSWindow.Level, done: @escaping (String?) -> Void) {
+        var finished = false
+        let finish: (String?) -> Void = { [weak self] value in
+            guard !finished else { return }
+            finished = true
+            self?.endInput()
+            self?.orderOut(nil)
+            let v = value.map { String($0.trimmingCharacters(in: .whitespacesAndNewlines).prefix(maxLength)) }
+            done(v?.isEmpty == true ? nil : v)
+        }
+        show(text, buttons: [.init(title: "好") { [weak self] in finish(self?.field?.stringValue) }, .init(title: "算了") { finish(nil) }],
+             input: 120, tipX: tipX, baseY: baseY, pixel: pixel, level: level, seconds: 180)
+        let r = view.inputRect
+        let f = NSTextField(frame: CGRect(x: (r.minX + 4) * pixel, y: (r.minY + 2) * pixel, width: (r.width - 8) * pixel, height: (r.height - 3) * pixel))
+        f.isBordered = false
+        f.drawsBackground = false
+        f.focusRingType = .none
+        f.font = NSFont(name: BubbleWindow.fontName, size: 12 * pixel)
+        f.textColor = NSColor(red: CGFloat(BubbleView.ink.r) / 255, green: CGFloat(BubbleView.ink.g) / 255, blue: CGFloat(BubbleView.ink.b) / 255, alpha: 1)
+        f.stringValue = initial
+        f.cell?.usesSingleLineMode = true
+        f.cell?.lineBreakMode = .byClipping
+        let fd = FieldDelegate(submit: { [weak f] in finish(f?.stringValue) }, cancel: { finish(nil) })
+        f.delegate = fd
+        fieldDelegate = fd
+        field = f
+        view.addSubview(f)
+        ignoresMouseEvents = false
+        NSApp.activate(ignoringOtherApps: true)
+        makeKeyAndOrderFront(nil)
+        makeFirstResponder(f)
+        f.currentEditor()?.selectAll(nil)
+    }
+
+    private func endInput() {
+        field?.removeFromSuperview()
+        field = nil
+        fieldDelegate = nil
+    }
+
+    override func orderOut(_ sender: Any?) {
+        if field != nil { endInput() }
+        super.orderOut(sender)
+    }
+
+    private func show(_ text: String, buttons: [Button], input: Int?, tipX: CGFloat, baseY: CGFloat, pixel: CGFloat,
+                      level: NSWindow.Level, seconds: TimeInterval) {
+        if field != nil { endInput() }
         self.text = text
         self.buttons = buttons
-        view.layout(text: text, buttons: buttons.map(\.title))
+        view.layout(text: text, buttons: buttons.map(\.title), input: input)
         let size = CGSize(width: CGFloat(view.artWidth) * pixel, height: CGFloat(view.artHeight) * pixel)
         view.pixel = pixel
         ignoresMouseEvents = buttons.isEmpty
@@ -61,6 +116,17 @@ final class BubbleWindow: NSPanel {
     }
 }
 
+/// Return submits, Esc cancels.
+private final class FieldDelegate: NSObject, NSTextFieldDelegate {
+    let submit: () -> Void, cancel: () -> Void
+    init(submit: @escaping () -> Void, cancel: @escaping () -> Void) { self.submit = submit; self.cancel = cancel }
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy sel: Selector) -> Bool {
+        if sel == #selector(NSResponder.insertNewline(_:)) { submit(); return true }
+        if sel == #selector(NSResponder.cancelOperation(_:)) { cancel(); return true }
+        return false
+    }
+}
+
 /// Draws the bubble bitmap and handles button clicks / hover.
 final class BubbleView: NSView {
     var onButton: ((Int) -> Void)?
@@ -71,12 +137,13 @@ final class BubbleView: NSView {
     private var lines: [String] = []
     private var buttonTitles: [String] = []
     private var buttonRects: [CGRect] = []      // in art pixels, origin bottom-left
+    private(set) var inputRect = CGRect.zero    // the text box, in art pixels (zero when none)
     private var hover: Int? { didSet { if hover != oldValue { render() } } }
     private let imageLayer = CALayer()
     private var tracking: NSTrackingArea?
 
     static let ink = (r: 64, g: 60, b: 66)
-    static let tail = 4, pad = 6, lineH = 14, btnH = 14, btnGap = 4
+    static let tail = 4, pad = 6, lineH = 14, btnH = 14, btnGap = 4, inputH = 17
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -94,15 +161,21 @@ final class BubbleView: NSView {
         return Int(ceil(CTLineGetTypographicBounds(line, nil, nil, nil)))
     }
 
-    func layout(text: String, buttons: [String]) {
+    func layout(text: String, buttons: [String], input: Int? = nil) {
         lines = text.components(separatedBy: "\n")
         buttonTitles = buttons
         let textW = lines.map(textWidth).max() ?? 0
         let btnWs = buttons.map { textWidth($0) + 10 }
         let btnRow = btnWs.reduce(0, +) + max(0, btnWs.count - 1) * Self.btnGap
-        artWidth = max(textW, btnRow) + Self.pad * 2
+        artWidth = max(textW, btnRow, input ?? 0) + Self.pad * 2
         let textH = lines.count * Self.lineH
-        artHeight = Self.tail + Self.pad + textH + (buttons.isEmpty ? 0 : Self.btnGap + Self.btnH) + Self.pad - 2
+        let inputRow = input == nil ? 0 : Self.inputH + Self.btnGap
+        artHeight = Self.tail + Self.pad + textH + inputRow + (buttons.isEmpty ? 0 : Self.btnGap + Self.btnH) + Self.pad - 2
+        inputRect = .zero
+        if let input {
+            let iy = Self.tail + Self.pad - 1 + (buttons.isEmpty ? 0 : Self.btnH + Self.btnGap)
+            inputRect = CGRect(x: (artWidth - input) / 2, y: iy, width: input, height: Self.inputH)
+        }
         // Buttons centred in a row under the text.
         buttonRects = []
         var bx = (artWidth - btnRow) / 2
@@ -152,6 +225,13 @@ final class BubbleView: NSView {
             ctx.textPosition = CGPoint(x: (w - lw) / 2, y: y)
             CTLineDraw(line, ctx)
         }
+        // Text box: sunken, a shade line on top.
+        if inputRect != .zero {
+            let x = Int(inputRect.minX), y = Int(inputRect.minY), rw = Int(inputRect.width), rh = Int(inputRect.height)
+            rect(x, y, rw, rh, ink)
+            rect(x + 1, y + 1, rw - 2, rh - 2, paper)
+            rect(x + 1, y + rh - 2, rw - 2, 1, shade)
+        }
         // Buttons.
         for (i, r) in buttonRects.enumerated() {
             let fill = hover == i ? CGColor(red: 0.80, green: 0.80, blue: 0.84, alpha: 1) : CGColor(red: 0.93, green: 0.93, blue: 0.95, alpha: 1)
@@ -170,6 +250,26 @@ final class BubbleView: NSView {
     }
 
     override func layout() { super.layout(); imageLayer.frame = bounds }
+
+    /// A small pixel name tag (white pill, ink outline, pixel font), one bitmap pixel per art pixel.
+    static func tag(_ text: String, fill: (CGFloat, CGFloat, CGFloat) = (1, 1, 1)) -> CGImage? {
+        let font = CTFontCreateWithName(BubbleWindow.fontName as CFString, 12, nil)
+        let line = CTLineCreateWithAttributedString(NSAttributedString(string: text, attributes: [.font: font]))
+        let tw = Int(ceil(CTLineGetTypographicBounds(line, nil, nil, nil)))
+        let w = tw + 8, h = 15
+        guard let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
+                                  space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        ctx.setShouldAntialias(false); ctx.setAllowsAntialiasing(false); ctx.setShouldSmoothFonts(false)
+        let ink = CGColor(red: CGFloat(Self.ink.r) / 255, green: CGFloat(Self.ink.g) / 255, blue: CGFloat(Self.ink.b) / 255, alpha: 1)
+        func rect(_ x: Int, _ y: Int, _ rw: Int, _ rh: Int, _ c: CGColor) { ctx.setFillColor(c); ctx.fill(CGRect(x: x, y: y, width: rw, height: rh)) }
+        let paper = CGColor(red: fill.0, green: fill.1, blue: fill.2, alpha: 1)
+        rect(1, 0, w - 2, h, ink); rect(0, 1, w, h - 2, ink)
+        rect(1, 1, w - 2, h - 2, paper)
+        let attr = NSAttributedString(string: text, attributes: [.font: font, .foregroundColor: NSColor(cgColor: ink)!])
+        ctx.textPosition = CGPoint(x: 4, y: 4)
+        CTLineDraw(CTLineCreateWithAttributedString(attr), ctx)
+        return ctx.makeImage()
+    }
 
     override func updateTrackingAreas() {
         if let t = tracking { removeTrackingArea(t) }

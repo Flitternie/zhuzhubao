@@ -9,3 +9,7 @@ app/build/
 app/tools/draw_perch_tail.py
 
 .DS_Store
+
+# Relay server (Cloudflare Worker)
+server/node_modules/
+server/.wrangler/

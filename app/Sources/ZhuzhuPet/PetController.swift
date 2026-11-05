@@ -72,6 +72,8 @@ final class PetController {
     let actionBar = ActionBar()
     private var pendingAlert: CalendarWatcher.Alert?
     var openSettings: (() -> Void)?
+    /// More right-click buttons (visiting a friend).
+    var extraActions: (() -> [ActionBar.Action])?
     let sprites = SpriteSet()
     var onChange: (() -> Void)?
 
@@ -171,6 +173,7 @@ final class PetController {
     private var shrimpHeld = false          // following the cursor until the user clicks to drop it
     private var shrimpHeldSince = Date()
     private(set) var shrimpOnFloor = false
+    var shrimpGiver: String?                // the friend whose hand dropped it
     var playMode = false { didSet { playModeChanged() } }
     // Floating hearts / Z's.
     let effects = Effects()
@@ -951,11 +954,20 @@ final class PetController {
 
     /// Speak: a pixel bubble just above the cat's head (never over the cat), tail pointing at the face.
     func showBubble(_ text: String, seconds: TimeInterval = 60, buttons: [BubbleWindow.Button] = []) {
+        let (tipX, baseY) = bubbleAnchor()
+        bubble.show(text, buttons: buttons, tipX: tipX, baseY: baseY, pixel: scale, level: .floating, seconds: seconds)
+    }
+
+    /// Ask for a bit of text in a pixel bubble with a text box (nil when cancelled or left empty).
+    func ask(_ text: String, initial: String = "", maxLength: Int, done: @escaping (String?) -> Void) {
+        let (tipX, baseY) = bubbleAnchor()
+        bubble.ask(text, initial: initial, maxLength: maxLength, tipX: tipX, baseY: baseY, pixel: scale, level: .floating, done: done)
+    }
+
+    private func bubbleAnchor() -> (CGFloat, CGFloat) {
         if case .peeking(let side, let y, _) = state {        // above the head poking out of the edge
             let vf = currentScreen.visibleFrame
-            let tipX = side > 0 ? vf.maxX - 22 * scale : vf.minX + 22 * scale
-            bubble.show(text, buttons: buttons, tipX: tipX, baseY: y + 128 * scale, pixel: scale, level: .floating, seconds: seconds)
-            return
+            return (side > 0 ? vf.maxX - 22 * scale : vf.minX + 22 * scale, y + 128 * scale)
         }
         let f = window.frame
         let frame = currentFrame()
@@ -964,7 +976,7 @@ final class PetController {
         var (lo, hi) = frame.headSpan()
         if facingRight { (lo, hi) = (frame.width - 1 - hi, frame.width - 1 - lo) }
         let tipX = f.minX + CGFloat(lo + hi) / 2 * scale * (f.width / max(1, w))
-        bubble.show(text, buttons: buttons, tipX: tipX, baseY: topY + 2 * scale, pixel: scale, level: .floating, seconds: seconds)
+        return (tipX, topY + 2 * scale)
     }
 
     /// Close the bubble only if it still shows `text`.
@@ -1895,8 +1907,8 @@ extension PetController {
 
     /// Being petted while awake: mostly purring, but sometimes it stretches, gives the spot a lick,
     /// or just squints happily and meows.
-    private func reactToPetting() {
-        gainAffection(.pet, delay: 2.8)
+    private func reactToPetting(counts: Bool = true) {
+        if counts { gainAffection(.pet, delay: 2.8) }
         // The more it likes you, the more often it flops down to knead or show its belly.
         if Int.random(in: 0..<100) < affection.cuddleChance, perch == nil, !sprites.lieClips.isEmpty, !sprites.lie.isEmpty {
             showBubble(["呼噜…最喜欢你了", "呼噜呼噜～"].randomElement()!, seconds: 2)
@@ -2186,8 +2198,13 @@ extension PetController {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
             guard let self else { return }
             self.heartsUntil = Date().addingTimeInterval(1.6)
-            let full = !self.gainAffection(.shrimp, delay: 2.4)
-            self.showBubble(full ? ["好吃！今天吃饱啦～", "好吃！明天再喂我吧"].randomElement()! : "好吃！", seconds: 2)
+            if let giver = self.shrimpGiver {            // a friend's shrimp: thanks them, no affection with you
+                self.shrimpGiver = nil
+                self.showBubble(["\(giver)喂的虾，好吃！", "谢谢\(giver)的虾～"].randomElement()!, seconds: 2.5)
+            } else {
+                let full = !self.gainAffection(.shrimp, delay: 2.4)
+                self.showBubble(full ? ["好吃！今天吃饱啦～", "好吃！明天再喂我吧"].randomElement()! : "好吃！", seconds: 2)
+            }
             self.play([(.happy, 1.4), (.neutral, 0.4), (.lick, 0.16), (.neutral, 0.1), (.lick, 0.16)])
         }
     }
@@ -2208,13 +2225,14 @@ extension PetController {
         if actionBar.isVisible { actionBar.dismiss(); return }      // right-click again to close
         bubble.orderOut(nil)
         let ui = sprites.ui
-        let actions: [ActionBar.Action] = [
+        var actions: [ActionBar.Action] = [
             .init(icon: ui["shrimp"]!, tip: "喂一只虾（点一下放下）") { [weak self] in self?.feedShrimp() },
             .init(icon: ui["toy"]!, tip: playMode ? "收起逗猫红点" : "逗猫：红点跟着鼠标") { [weak self] in self?.playMode.toggle() },
             .init(icon: ui["water"]!, tip: "我喝水了") { [weak self] in self?.refill() },
             .init(icon: (onTop ? ui["pin"] : ui["pin-off"]) ?? ui["gear"]!,
                   tip: onTop ? "钉在最前面啦（点一下躲到窗口后面）" : "把我钉到最前面") { [weak self] in self?.togglePin() },
         ]
+        actions += extraActions?() ?? []
         let f = window.frame
         // Just above the cat's head, never over it.
         let fr = currentFrame()
@@ -2645,5 +2663,90 @@ extension PetController {
         }
         state = .climbing(tick: tick, x: x, top: top)
         render()
+    }
+}
+
+// MARK: - Friends dropping by (their pixel hand) and what the friend relay needs to know
+
+extension PetController {
+    /// Sent to paired friends. "peek" (hiding at the screen edge) means resting: nobody drops by then.
+    var netStatus: String {
+        switch state {
+        case .peeking: return "peek"
+        case .sleeping, .dozing: return "sleep"
+        case .loafing, .lyingDown, .perchLying: return "lie"
+        case .drinking: return "drink"
+        case .eating: return "eat"
+        default: return "awake"
+        }
+    }
+    var headPoint: CGPoint { headTop().0 }
+    /// +1 when the face points right on screen.
+    var facing: CGFloat { headTop().1 }
+    var isMoving: Bool {
+        switch state { case .walking, .standingUp, .sittingDown, .eating, .pouncing, .jumping, .leaping, .climbing, .held, .flying, .landing: return true; default: return false }
+    }
+    var windowLevel: NSWindow.Level { levelValue }
+    var screenFrame: CGRect { currentScreen.visibleFrame }
+    var isAsleep: Bool { switch state { case .sleeping, .dozing: return true; default: return false } }
+
+    /// Hearts and a happy face.
+    func cheer(_ seconds: TimeInterval = 1.6) {
+        heartsUntil = Date().addingTimeInterval(seconds)
+        if !isAsleep { play([(.happy, seconds)]) }
+    }
+
+    /// A friend's hand strokes the cat: the same purring, kneading and belly rolls as your own petting
+    /// (by your affection level), but it does not add to your affection.
+    func friendPetted(by name: String) {
+        switch state {
+        case .sitting, .tailFlick:
+            reactToPetting(counts: false)
+        case .petted:
+            heartsUntil = Date().addingTimeInterval(1.2)
+        case .loafing:
+            play([(.closed, 2.0)])
+            let r = Int.random(in: 0..<100)
+            let clip: String? = r < affection.bellyWhenLyingChance ? "belly"
+                              : r < affection.bellyWhenLyingChance + affection.kneadWhenLyingChance ? "knead" : nil
+            if let clip, lieClip == nil, sprites.lieClips[clip] != nil { lieClip = (clip, 0); loafTailTick = nil }
+            showBubble("呼噜…", seconds: 2)
+        case .sleeping, .dozing:
+            sleepPetUntil = Date().addingTimeInterval(2.5)
+            showBubble("呼噜…", seconds: 2)
+        default:
+            heartsUntil = Date().addingTimeInterval(1.2)
+        }
+    }
+
+    /// A friend's hand lets go of a shrimp at `p` (screen point, bottom-left of the shrimp). False if one is already out.
+    @discardableResult
+    func friendDroppedShrimp(at p: CGPoint, by name: String) -> Bool {
+        if shrimpOnFloor || shrimpFalling || shrimpHeld || isEating { return false }
+        shrimpGiver = name
+        shrimpView.frame = CGRect(x: 0, y: 0, width: 26 * scale, height: 19 * scale)
+        shrimpView.show(sprites.shrimp, mirrored: false)
+        let vf = currentScreen.visibleFrame
+        shrimpX = min(max(p.x, vf.minX + 2), vf.maxX - 28 * scale)
+        shrimpY = p.y
+        shrimpVY = 0
+        shrimpWindow.setFrame(CGRect(x: shrimpX, y: shrimpY, width: 26 * scale, height: 19 * scale), display: false)
+        shrimpWindow.ignoresMouseEvents = true
+        shrimpWindow.level = levelValue
+        shrimpWindow.alphaValue = 1
+        shrimpWindow.orderFrontRegardless()
+        shrimpFalling = true
+        switch state { case .sleeping, .lyingDown, .loafing, .dozing: wake(); default: break }
+        play([(.wide, 1.5)])
+        return true
+    }
+
+    /// A friend's hand waves hello: the cat meows and passes on what they said.
+    func friendSaidHi(_ text: String, buttons: [BubbleWindow.Button]) {
+        switch state { case .sleeping, .dozing, .loafing, .lyingDown: wake(); default: break }
+        play([(.wide, 0.5), (.meow, 0.4), (.happy, 1.2)])
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
+            self?.showBubble(text, seconds: 30, buttons: buttons)
+        }
     }
 }

@@ -45,6 +45,10 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>SUEnableAutomaticChecks</key><true/>
   <key>SUAutomaticallyUpdate</key><true/>
   <key>SUScheduledCheckInterval</key><integer>86400</integer>
+  <key>CFBundleURLTypes</key><array><dict>
+    <key>CFBundleURLName</key><string>local.zhuzhubao.pet.invite</string>
+    <key>CFBundleURLSchemes</key><array><string>zhuzhubao</string></array>
+  </dict></array>
   <key>NSCalendarsUsageDescription</key><string>猪猪包会在日程开始前提醒你。</string>
   <key>NSCalendarsFullAccessUsageDescription</key><string>猪猪包会读取日历里的日程，在开始前提醒你。只在本机读取，不会上传。</string>
 </dict>

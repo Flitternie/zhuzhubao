@@ -215,7 +215,7 @@ final class SpriteSet {
         for n in ["scratch", "sneeze", "swat", "ear", "headshake"] { let f = SpriteSet.sequence("\(n)/\(n)"); if !f.isEmpty { cl[n] = f } }
         clips = cl
         var icons: [String: CGImage] = [:]
-        for n in ["shrimp", "toy", "water", "gear", "close", "pin", "pin-off"] { icons[n] = SpriteSet.tryLoad("ui/\(n)")?.image }
+        for n in ["shrimp", "toy", "water", "gear", "close", "pin", "pin-off", "hand", "hi", "friends"] { icons[n] = SpriteSet.tryLoad("ui/\(n)")?.image }
         ui = icons
     }
 

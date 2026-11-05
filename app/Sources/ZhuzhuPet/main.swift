@@ -5,6 +5,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var pet: PetController!
     private let calendar = CalendarWatcher()
     private let updater = Updater()
+    private let friends = Friends()
+    private var social: Social!
+    private var menuOpen = false
     private var statusItem: NSStatusItem!
     private let sizes: [(String, CGFloat)] = [("小包", 1.0), ("大包", 1.5)]
 
@@ -21,6 +24,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         calendar.onAccessChange = { [weak self] in self?.rebuildMenu() }
         updater.announce = { [weak self] text, buttons in self?.pet.showBubble(text, seconds: 120, buttons: buttons) }
         updater.start()
+        social = Social(pet: pet, friends: friends)
+        social.onChange = { [weak self] in self?.rebuildMenu() }
+        friends.start()
+        netTests()
         if CommandLine.arguments.contains("--sleep-test") {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.pet.runSleepTest(wakeAfter: Double(ProcessInfo.processInfo.environment["ZHUZHU_WAKE"] ?? "9") ?? 9) }
         }
@@ -113,6 +120,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         buildStatusItem()
     }
 
+    /// zhuzhubao://add/<code>?from=<name>, opened from the invite page (https://zhuzhubao.lynie.cc/add/<code>).
+    func application(_ application: NSApplication, open urls: [URL]) {
+        for url in urls where url.scheme == "zhuzhubao" && url.host == "add" {
+            let code = url.lastPathComponent.lowercased().filter { $0.isASCII && ($0.isLetter || $0.isNumber) }
+            let from = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "from" }?.value
+            guard (6...16).contains(code.count) else { continue }
+            // Right after a launch the cat is still getting ready; give it a moment.
+            DispatchQueue.main.asyncAfter(deadline: .now() + (social == nil ? 2 : 0.3)) { self.social?.openInvite(code: code, from: from) }
+        }
+    }
+
     private func buildStatusItem() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         if let button = statusItem.button {
@@ -131,6 +149,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func rebuildMenu() {
+        if menuOpen { needsRebuild = true; return }     // don't swap the menu while it is open
         let menu = NSMenu()
         menu.delegate = self
 
@@ -188,6 +207,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         menu.addItem(.separator())
 
+        menu.addItem(friendsItem())
+        menu.addItem(.separator())
+
         let pause = NSMenuItem(title: pet.paused ? "继续走动" : "原地坐着", action: #selector(togglePause), keyEquivalent: "")
         pause.target = self
         menu.addItem(pause)
@@ -234,6 +256,91 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         quit.target = self
         menu.addItem(quit)
         statusItem.menu = menu
+    }
+
+    /// 好友: each paired friend (status, drop by, say hi, unpair), then invite / enter a code / my name.
+    private func friendsItem() -> NSMenuItem {
+        let item = NSMenuItem(title: "小咪好友", action: nil, keyEquivalent: "")
+        let m = NSMenu()
+        let list = friends.friends
+        if !list.isEmpty && !friends.connected {
+            let wait = NSMenuItem(title: "正在连接…", action: nil, keyEquivalent: "")
+            wait.isEnabled = false
+            m.addItem(wait)
+        }
+        for f in list {
+            let fi = NSMenuItem(title: "\(f.display) · \(friends.connected ? f.statusText : "不在线")", action: nil, keyEquivalent: "")
+            let sub = NSMenu()
+            if social.visiting == f.id {
+                sub.addItem(menuItem("回家", #selector(leaveVisit)))
+            } else {
+                let go = menuItem("去串门", #selector(visitFriend(_:)), f.id)
+                go.isEnabled = f.canVisit
+                sub.addItem(go)
+            }
+            sub.addItem(.separator())
+            sub.addItem(menuItem("解除小咪好友…", #selector(unpairFriend(_:)), f.id))
+            fi.submenu = sub
+            m.addItem(fi)
+        }
+        if !list.isEmpty { m.addItem(.separator()) }
+        m.addItem(menuItem("添加小咪好友…", #selector(addFriend)))
+        if !friends.myName.isEmpty { m.addItem(menuItem("我的名字：\(friends.myName)", #selector(renameMe))) }
+        item.submenu = m
+        return item
+    }
+
+    private func menuItem(_ title: String, _ action: Selector, _ object: Any? = nil) -> NSMenuItem {
+        let i = NSMenuItem(title: title, action: action, keyEquivalent: "")
+        i.target = self
+        i.representedObject = object
+        return i
+    }
+
+    // Run after the menu has closed, so the bubble's text box can take the keyboard.
+    @objc private func addFriend() { DispatchQueue.main.async { self.social.addFriend() } }
+    @objc private func renameMe() { DispatchQueue.main.async { self.social.rename() } }
+    @objc private func leaveVisit() { social.leaveVisit() }
+    @objc private func visitFriend(_ sender: NSMenuItem) {
+        if let id = sender.representedObject as? String, let f = friends.friend(id) { social.startVisit(f) }
+    }
+    @objc private func unpairFriend(_ sender: NSMenuItem) {
+        if let id = sender.representedObject as? String, let f = friends.friend(id) { DispatchQueue.main.async { self.social.unpair(f) } }
+    }
+
+    /// Testing friends on one Mac: two copies with ZHUZHU_NET_PROFILE=a / b and ZHUZHU_RELAY=ws://localhost:8799/ws.
+    ///   ZHUZHU_NET_NAME=<name> sets the name; --net-invite writes the code to ZHUZHU_CODE_FILE;
+    ///   --net-redeem reads it from there; --net-visit drops by the first friend and does everything once.
+    private func netTests() {
+        let env = ProcessInfo.processInfo.environment
+        if let n = env["ZHUZHU_NET_NAME"] { friends.myName = n }
+        let args = CommandLine.arguments
+        if args.contains("--friends-button-test") { DispatchQueue.main.asyncAfter(deadline: .now() + 4) { self.social.testFriendsButton() } }
+        if args.contains("--ask-test") { DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { self.social.rename() } }
+        if args.contains("--net-invite"), let file = env["ZHUZHU_CODE_FILE"] {
+            let old = friends.onEvent
+            friends.onEvent = { e in
+                if case .code(let c) = e { try? c.write(toFile: file, atomically: true, encoding: .utf8) }
+                old?(e)
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.social.addFriend() }
+        }
+        if args.contains("--net-redeem"), let file = env["ZHUZHU_CODE_FILE"] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+                if let c = try? String(contentsOfFile: file, encoding: .utf8) { self.friends.redeem(c.trimmingCharacters(in: .whitespacesAndNewlines)) }
+            }
+        }
+        if args.contains("--net-visit") {
+            let wait = Double(env["ZHUZHU_VISIT_AFTER"] ?? "3") ?? 3
+            let steps: [(Double, () -> Void)] = [
+                (0, { if let f = self.friends.friends.first { self.social.startVisit(f) } }),
+                (4, { self.social.testAct("pet") }),
+                (10, { self.social.testAct("shrimp") }),
+                (19, { self.social.testAct("hi", "下班一起吃饭吗") }),
+                (26, { self.social.leaveVisit() }),
+            ]
+            for (t, run) in steps { DispatchQueue.main.asyncAfter(deadline: .now() + wait + t, execute: run) }
+        }
     }
 
     @objc private func togglePause() { pet.paused.toggle(); rebuildMenu() }
@@ -286,7 +393,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         pet.drinkInterval = minutes * 60
         rebuildMenu()
     }
+    func menuDidClose(_ menu: NSMenu) {
+        menuOpen = false
+        if needsRebuild { needsRebuild = false; DispatchQueue.main.async { self.rebuildMenu() } }
+    }
+    private var needsRebuild = false
     func menuWillOpen(_ menu: NSMenu) {
+        menuOpen = true
         // refresh the cup count; rebuild after the menu closes to avoid swapping it while open
         if let first = menu.items.first { first.title = "今天喝了 \(pet.cupsToday) 杯水" }
         menu.item(withTag: 7001)?.title = pet.affection.hearts

@@ -1,0 +1,17 @@
+name = "zhuzhubao-relay"
+main = "src/index.js"
+compatibility_date = "2026-10-01"
+workers_dev = false
+routes = [{ pattern = "zhuzhubao.lynie.cc", custom_domain = true }]
+
+# The invite page's pixel font (subset) and cat picture.
+[assets]
+directory = "./public"
+
+[[durable_objects.bindings]]
+name = "HUB"
+class_name = "Hub"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Hub"]
