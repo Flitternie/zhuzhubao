@@ -42,6 +42,8 @@ final class BubbleWindow: NSPanel {
     /// `pixel` is the size of one art pixel in points (the cat's scale). `tipX` is where the tail points, in screen x.
     func show(_ text: String, buttons: [Button] = [], tipX: CGFloat, baseY: CGFloat, pixel: CGFloat,
               level: NSWindow.Level, seconds: TimeInterval) {
+        // While someone is typing in a text box, other chatter must not replace it.
+        if field != nil && isVisible { return }
         show(text, buttons: buttons, input: nil, tipX: tipX, baseY: baseY, pixel: pixel, level: level, seconds: seconds)
     }
 
@@ -57,10 +59,13 @@ final class BubbleWindow: NSPanel {
             let v = value.map { String($0.trimmingCharacters(in: .whitespacesAndNewlines).prefix(maxLength)) }
             done(v?.isEmpty == true ? nil : v)
         }
-        show(text, buttons: [.init(title: "好") { [weak self] in finish(self?.field?.stringValue) }, .init(title: "算了") { finish(nil) }],
+        // The field is made first and held by the buttons: clicking a button closes the bubble (and
+        // removes the field) before the button's action runs, so read the text from this reference.
+        let f = NSTextField(frame: .zero)
+        show(text, buttons: [.init(title: "好") { finish(f.stringValue) }, .init(title: "算了") { finish(nil) }],
              input: 120, tipX: tipX, baseY: baseY, pixel: pixel, level: level, seconds: 180)
         let r = view.inputRect
-        let f = NSTextField(frame: CGRect(x: (r.minX + 4) * pixel, y: (r.minY + 2) * pixel, width: (r.width - 8) * pixel, height: (r.height - 3) * pixel))
+        f.frame = CGRect(x: (r.minX + 4) * pixel, y: (r.minY + 2) * pixel, width: (r.width - 8) * pixel, height: (r.height - 3) * pixel)
         f.isBordered = false
         f.drawsBackground = false
         f.focusRingType = .none
@@ -69,7 +74,7 @@ final class BubbleWindow: NSPanel {
         f.stringValue = initial
         f.cell?.usesSingleLineMode = true
         f.cell?.lineBreakMode = .byClipping
-        let fd = FieldDelegate(submit: { [weak f] in finish(f?.stringValue) }, cancel: { finish(nil) })
+        let fd = FieldDelegate(submit: { finish(f.stringValue) }, cancel: { finish(nil) })
         f.delegate = fd
         fieldDelegate = fd
         field = f
@@ -86,6 +91,9 @@ final class BubbleWindow: NSPanel {
         field = nil
         fieldDelegate = nil
     }
+
+    /// Testing: press the bubble's button `i` as a click would.
+    func pressButton(_ i: Int) { view.onButton?(i) }
 
     override func orderOut(_ sender: Any?) {
         if field != nil { endInput() }

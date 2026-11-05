@@ -316,6 +316,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if let n = env["ZHUZHU_NET_NAME"] { friends.myName = n }
         let args = CommandLine.arguments
         if args.contains("--friends-button-test") { DispatchQueue.main.asyncAfter(deadline: .now() + 4) { self.social.testFriendsButton() } }
+        if args.contains("--ask-click-test") {      // type a name, click 好: it must be saved
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                self.social.rename()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+                    (self.pet.bubble.contentView?.subviews.compactMap { $0 as? NSTextField }.first)?.stringValue = "点击测试"
+                    self.pet.bubble.pressButton(0)
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { print("name after click:", self.friends.myName); fflush(stdout) }
+                }
+            }
+        }
+        if args.contains("--invite-flow-test"), let code = env["ZHUZHU_INVITE"] {   // open a link, say yes, give a name
+            let b = self.pet.bubble
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3) { self.social.openInvite(code: code, from: "小红") }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 4) { b.pressButton(0) }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
+                (b.contentView?.subviews.compactMap { $0 as? NSTextField }.first)?.stringValue = "小测"
+                b.pressButton(0)
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 9) {
+                print("my name:", self.friends.myName, "friends:", self.friends.friends.map(\.display)); fflush(stdout)
+            }
+        }
         if args.contains("--ask-test") { DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { self.social.rename() } }
         if args.contains("--net-invite"), let file = env["ZHUZHU_CODE_FILE"] {
             let old = friends.onEvent

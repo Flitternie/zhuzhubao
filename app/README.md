@@ -110,7 +110,7 @@ ZHUZHU_SIGN="Developer ID Application: 名字 (TEAMID)" ZHUZHU_NOTARY_PROFILE=�
 - 每天上限（每个朋友）：喂虾 3 只、摸摸 30 次、打招呼 40 次、进门 30 次。
 - 隐私：没配对过就完全不联网。服务器只存随机身份、名字、配对关系、暗号和每日计数；串门和招呼只实时转发，不保存。
 - 代码：`Friends.swift`（连接、配对、在线状态）、`Visit.swift`（串门流程和小手）。小手和图标由 `tools/make_hand.py` 画。服务器在仓库的 `server/`（Cloudflare Worker + Durable Object，部署在 `zhuzhubao.lynie.cc`，`cd server && npx wrangler deploy`）。
-- 测试：两份身份跑在同一台 Mac 上，`ZHUZHU_NET_PROFILE=a|b`、`ZHUZHU_RELAY=ws://localhost:8799/ws`（本地 `npx wrangler dev --port 8799`）、`ZHUZHU_NET_NAME=<名字>`；`--net-invite`（邀请码写到 `ZHUZHU_CODE_FILE`）、`--net-redeem`、`--net-visit`（进门、摸、喂、招呼、回家各一次）、`--ask-test`（像素输入框）。
+- 测试：两份身份跑在同一台 Mac 上，`ZHUZHU_NET_PROFILE=a|b`、`ZHUZHU_RELAY=ws://localhost:8799/ws`（本地 `npx wrangler dev --port 8799`）、`ZHUZHU_NET_NAME=<名字>`；`--net-invite`（邀请码写到 `ZHUZHU_CODE_FILE`）、`--net-redeem`、`--net-visit`（进门、摸、喂、招呼、回家各一次）、`--ask-test`（像素输入框）、`--ask-click-test`（输入后点「好」要保存）、`--invite-flow-test`（`ZHUZHU_INVITE=<码>`：打开邀请、点好呀、起名字）。
 
 ## 菜单栏
 
